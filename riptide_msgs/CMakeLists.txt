@@ -20,6 +20,12 @@ add_message_files(
     SwitchState.msg
     ObjectData.msg
     GateData.msg
+    ResetControls.msg
+    ControlStatus.msg
+    ControlStatusAngular.msg
+    ControlStatusLinear.msg
+    MassVol.msg
+    RotationOut.msg
 )
 
 generate_messages(DEPENDENCIES std_msgs geometry_msgs)

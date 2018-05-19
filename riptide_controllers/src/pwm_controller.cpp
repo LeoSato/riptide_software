@@ -11,6 +11,9 @@
 #define NEG_XINT 1
 #define POS_SLOPE 2
 #define POS_XINT 3
+#define MIN_PWM 1300
+#define MAX_PWM 1700
+#define MIN_THRUST 0.15
 
 int main(int argc, char** argv)
 {
@@ -23,6 +26,7 @@ PWMController::PWMController() : nh()
 {
   cmd_sub = nh.subscribe<riptide_msgs::ThrustStamped>("command/thrust", 1, &PWMController::ThrustCB, this);
   kill_sub = nh.subscribe<riptide_msgs::SwitchState>("state/switches", 1, &PWMController::SwitchCB, this);
+  reset_sub = nh.subscribe<riptide_msgs::ResetControls>("controls/reset", 1, &PWMController::ResetController, this);
   pwm_pub = nh.advertise<riptide_msgs::PwmStamped>("command/pwm", 1);
 
   //Initialization of the two trust/pwm slope arrays
@@ -33,37 +37,37 @@ PWMController::PWMController() : nh()
   load_calibration(thrust_config[SPL][POS_SLOPE], "/SPL/POS/SLOPE");
   load_calibration(thrust_config[SPL][NEG_XINT], "/SPL/NEG/XINT");
   load_calibration(thrust_config[SPL][POS_XINT], "/SPL/POS/XINT");
-
+  // Surge Starboard Low
   load_calibration(thrust_config[SSL][NEG_SLOPE], "/SSL/NEG/SLOPE");
   load_calibration(thrust_config[SSL][POS_SLOPE], "/SSL/POS/SLOPE");
   load_calibration(thrust_config[SSL][NEG_XINT], "/SSL/NEG/XINT");
   load_calibration(thrust_config[SSL][POS_XINT], "/SSL/POS/XINT");
-
+  // Heave Port Aft
   load_calibration(thrust_config[HPA][NEG_SLOPE], "/HPA/NEG/SLOPE");
   load_calibration(thrust_config[HPA][POS_SLOPE], "/HPA/POS/SLOPE");
   load_calibration(thrust_config[HPA][NEG_XINT], "/HPA/NEG/XINT");
   load_calibration(thrust_config[HPA][POS_XINT], "/HPA/POS/XINT");
-
+  // heave Port Forward
   load_calibration(thrust_config[HPF][NEG_SLOPE], "/HPF/NEG/SLOPE");
   load_calibration(thrust_config[HPF][POS_SLOPE], "/HPF/POS/SLOPE");
   load_calibration(thrust_config[HPF][NEG_XINT], "/HPF/NEG/XINT");
   load_calibration(thrust_config[HPF][POS_XINT], "/HPF/POS/XINT");
-
+  // Heave Starboard Aft
   load_calibration(thrust_config[HSA][NEG_SLOPE], "/HSA/NEG/SLOPE");
   load_calibration(thrust_config[HSA][POS_SLOPE], "/HSA/POS/SLOPE");
   load_calibration(thrust_config[HSA][NEG_XINT], "/HSA/NEG/XINT");
   load_calibration(thrust_config[HSA][POS_XINT], "/HSA/POS/XINT");
-
+  // Heave Starboard Forward
   load_calibration(thrust_config[HSF][NEG_SLOPE], "/HSF/NEG/SLOPE");
   load_calibration(thrust_config[HSF][POS_SLOPE], "/HSF/POS/SLOPE");
   load_calibration(thrust_config[HSF][NEG_XINT], "/HSF/NEG/XINT");
   load_calibration(thrust_config[HSF][POS_XINT], "/HSF/POS/XINT");
-
+  // Sway Forward
   load_calibration(thrust_config[SWF][NEG_SLOPE], "/SWF/NEG/SLOPE");
   load_calibration(thrust_config[SWF][POS_SLOPE], "/SWF/POS/SLOPE");
   load_calibration(thrust_config[SWF][NEG_XINT], "/SWF/NEG/XINT");
   load_calibration(thrust_config[SWF][POS_XINT], "/SWF/POS/XINT");
-
+  // Sway Aft
   load_calibration(thrust_config[SWA][NEG_SLOPE], "/SWA/NEG/SLOPE");
   load_calibration(thrust_config[SWA][POS_SLOPE], "/SWA/POS/SLOPE");
   load_calibration(thrust_config[SWA][NEG_XINT], "/SWA/NEG/XINT");
@@ -77,7 +81,7 @@ PWMController::PWMController() : nh()
 
 void PWMController::ThrustCB(const riptide_msgs::ThrustStamped::ConstPtr& thrust)
 {
-  if (!dead)
+  if (!dead && !silent)
   {
     msg.header.stamp = thrust->header.stamp;
 
@@ -103,9 +107,18 @@ void PWMController::SwitchCB(const riptide_msgs::SwitchState::ConstPtr &state)
   dead = !state->kill;
 }
 
+void PWMController::ResetController(const riptide_msgs::ResetControls::ConstPtr &reset_msg) {
+  if(reset_msg->reset_pwm)
+    silent = true;
+  else
+    silent = false;
+}
+
 void PWMController::Loop()
 {
-  ros::Rate rate(10);
+  // IMPORTANT: You MUST have a delay in publishing pwm msgs because copro
+  // can only process data so fast
+  ros::Rate rate(100);
   while (ros::ok())
   {
     ros::spinOnce();
@@ -129,16 +142,25 @@ int PWMController::thrust2pwm(double raw_force, int thruster)
   // If force is negative, use negative calibration.
   // If force is positive, use positive calibration
   // Otherwise, set PWM to 1500 (0 thrust)
-  if(raw_force < -0.01)
+  if(raw_force < -MIN_THRUST)
   {
     pwm = thrust_config[thruster][NEG_XINT] + static_cast<int>(raw_force*thrust_config[thruster][NEG_SLOPE]);
   }
-  else if(raw_force > 0.01){
+  else if(raw_force > MIN_THRUST){
     pwm = (int) (thrust_config[thruster][POS_XINT] + (raw_force*thrust_config[thruster][POS_SLOPE]));
   }
   else{
     pwm = 1500;
   }
+
+  // Constrain pwm output
+  // The thruster controller should not be the one constraining the output, it
+  // really should be the pwm controller.
+  if(pwm > MAX_PWM)
+    pwm = MAX_PWM;
+  if(pwm < MIN_PWM)
+    pwm = MIN_PWM;
+
   return pwm;
 }
 
